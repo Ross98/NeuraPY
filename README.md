@@ -245,3 +245,41 @@ python test_binary.py
 - 协议里 `enter_area` / `exit_area` / `work_area` / `blend_radius` 都解析了但**未使用**, 生产前按业务需要加进 neurapy 调用。
 - 机器人品牌码 `ROBOT_BRAND = 0x02` (KUKA) 是占位 (Neura 不在 xlsx 列表里), 上线前需要跟相机约定好。
 - **macOS 不能装 neurapy** (PDF §4.2: 官方只支持 Ubuntu 18.04/20.04)。本机用 `parse_frame.py` / `build_frame.py` 做协议开发, 部署到 Linux 控制器跑 `point_client.py`。
+
+
+## Debug UI (optional)
+
+Web-based debug panel for the 96-byte binary protocol. Lives in `web/`. Zero new pip dependencies; macOS / Windows / Linux (Python 3.7+).
+
+### Run
+
+```bash
+# Standalone UI + fake camera (no real point_client needed)
+python web/run.py --protocol neurapy --auto-start-camera
+
+# Full closed loop (point_client + mock neurapy via PYTHONPATH)
+python web/run_debug.py --protocol neurapy
+
+# Capture from real camera / point_client
+python web/run.py --protocol neurapy --inspector-connect 192.168.2.50:9000
+```
+
+Browser: http://127.0.0.1:8765
+
+### Add a new protocol
+
+1. `cp web/protocols/_template.py /path/to/my_proto.py`
+2. Set `FRAME_SIZE`, implement `classify` / `parse` / `build` / `schema`
+3. `python web/run.py --protocol /path/to/my_proto.py:MyProtocol`
+
+Or register a name: add `"myproj": "mymodule:MyProtocol"` to `web/protocols/REGISTRY`, then `--protocol myproj`.
+
+### Test
+
+```bash
+python -m unittest discover -s web/tests
+python -m unittest test_binary.py
+bash scripts/check_platform.sh
+```
+
+See `docs/manual-test.md`.

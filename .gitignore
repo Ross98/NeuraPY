@@ -13,3 +13,6 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# Codex brainstorming / visual companion
+.superpowers/

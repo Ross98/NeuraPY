@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>NeuraPY Debug UI</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>NeuraPY Debug UI</h1>
+  <span id="status" class="pill">offline</span>
+  <span id="cam" class="pill">camera: stopped</span>
+  <span id="mock" class="pill">mock: stopped</span>
+</header>
+<main>
+  <section id="left">
+    <h2>CONNECTS</h2>
+    <div class="row">
+      <label>Role <select id="role"><option>fake_camera</option></select></label>
+      <label>Port <input id="port" type="number" value="9000"></label>
+      <button id="startCam">Start</button>
+      <button id="stopCam">Stop</button>
+    </div>
+    <h3>Roles</h3>
+    <ul><li>◉ Camera</li><li>○ Robot</li><li>○ Inspector</li></ul>
+    <h3>Targets</h3>
+    <div class="row">
+      <label>Send to <select id="sendTarget"><option>fake_camera</option></select></label>
+      <button id="sendBtn">Send</button>
+    </div>
+  </section>
+  <section id="center">
+    <h2>FRAME INSPECTOR</h2>
+    <div id="hexGrid" class="hex-grid"></div>
+    <h3>Parsed</h3>
+    <pre id="parsed" class="kv">(select a frame from the log)</pre>
+    <h3>Log (last 200)</h3>
+    <ul id="log"></ul>
+  </section>
+  <section id="right">
+    <h2>FRAME BUILDER</h2>
+    <div class="row">
+      <label>Type <select id="frameType"></select></label>
+    </div>
+    <div id="fields"></div>
+    <div class="row">
+      <button id="buildBtn">Build</button>
+      <button id="sendBuildBtn">Send &amp; watch reply</button>
+    </div>
+    <h3>Hex override</h3>
+    <textarea id="hexOut" rows="3" spellcheck="false"></textarea>
+  </section>
+</main>
+<footer><span id="state">STATE  J=0 0 0 0 0 0  TCP=0 0 0 0 0 0  ◯ idle</span></footer>
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -31,8 +31,12 @@ def _get(url):
 def _post(url, body):
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=2) as r:
-        return r.status, r.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(req, timeout=2) as r:
+            return r.status, r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        # surface non-2xx as a normal (status, body) so tests can assert on it
+        return e.code, e.read().decode("utf-8")
 
 
 class TestServer(unittest.TestCase):
@@ -75,6 +79,30 @@ class TestServer(unittest.TestCase):
         j = json.loads(b)
         self.assertEqual(j["type"], "X")
         self.assertEqual(j["len"], 4)
+
+    def test_connect_disconnect_fake_camera(self):
+        # /api/connect should create + start a FakeCamera; /api/disconnect should stop it
+        self.assertIsNone(self.server._state.fake_camera)
+        port = _free_port()
+        s, b = _post(f"http://127.0.0.1:{self.port}/api/connect",
+                      {"role": "fake_camera", "port": port})
+        self.assertEqual(s, 200)
+        j = json.loads(b)
+        self.assertTrue(j["ok"])
+        self.assertIsNotNone(self.server._state.fake_camera)
+        # double-connect should refuse
+        s2, _ = _post(f"http://127.0.0.1:{self.port}/api/connect",
+                       {"role": "fake_camera", "port": _free_port()})
+        self.assertEqual(s2, 409)
+        # disconnect
+        s3, b3 = _post(f"http://127.0.0.1:{self.port}/api/disconnect",
+                        {"role": "fake_camera"})
+        self.assertEqual(s3, 200)
+        self.assertIsNone(self.server._state.fake_camera)
+        # double-disconnect should refuse
+        s4, _ = _post(f"http://127.0.0.1:{self.port}/api/disconnect",
+                       {"role": "fake_camera"})
+        self.assertEqual(s4, 409)
 
     def test_stream_emits_event(self):
         received = []

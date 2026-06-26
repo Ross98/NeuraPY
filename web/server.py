@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from web.protocol import Protocol
+from web.roles.fake_camera import FakeCamera
 from web.sse import sse_format
 from web.state import EventBus
 
@@ -127,6 +128,35 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
                     return
                 state.fake_camera.send_bytes(raw)
                 self._send(200, {"ok": True, "raw_hex": raw.hex(), "len": len(raw)})
+            elif path == "/api/connect":
+                role = body.get("role", "fake_camera")
+                port = int(body.get("port", 9000))
+                if role != "fake_camera":
+                    self._send(400, {"error": f"unknown role: {role!r}"})
+                    return
+                if state.fake_camera is not None:
+                    self._send(409, {"error": "fake_camera already running"})
+                    return
+                try:
+                    cam = FakeCamera(state.protocol, state.bus,
+                                     host="0.0.0.0", port=port)
+                    cam.start()
+                except OSError as e:
+                    self._send(503, {"error": f"port {port} bind failed: {e}"})
+                    return
+                state.fake_camera = cam
+                self._send(200, {"ok": True, "role": role, "port": port})
+            elif path == "/api/disconnect":
+                role = body.get("role", "fake_camera")
+                if role != "fake_camera":
+                    self._send(400, {"error": f"unknown role: {role!r}"})
+                    return
+                if state.fake_camera is None:
+                    self._send(409, {"error": "fake_camera not running"})
+                    return
+                state.fake_camera.stop()
+                state.fake_camera = None
+                self._send(200, {"ok": True, "role": role})
             else:
                 self._send(404, {"error": "not found"})
 

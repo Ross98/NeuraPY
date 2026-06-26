@@ -3,6 +3,7 @@ import json
 import unittest
 import urllib.request
 from contextlib import redirect_stdout
+import inspect
 from web.mock.neurapy import Robot, RobotError
 
 
@@ -63,3 +64,56 @@ class TestMockNeurapy(unittest.TestCase):
                          acceleration=50.0, current_joint_angles=[0]*6)
         lines = [l for l in buf.getvalue().splitlines() if l.startswith("{")]
         self.assertTrue(any('"event": "state"' in l for l in lines), lines)
+
+
+class TestMockNeurapyCompat(unittest.TestCase):
+    """Lock down API compatibility with point_client's usage of neurapy.Robot.
+
+    If point_client.py changes which kwargs / methods / attributes it accesses,
+    these tests will fail and force an explicit mock update.
+    """
+
+    def test_init_accepts_socket_address_kwarg(self):
+        # point_client does: Robot(socket_address=robot_ip)
+        r = Robot(socket_address="127.0.0.1", sidecar_port=19970)
+        self.assertIsNotNone(r)
+
+    def test_robot_name_attribute(self):
+        r = Robot(socket_address="127.0.0.1", sidecar_port=19971)
+        self.assertTrue(hasattr(r, "robot_name"))
+        self.assertIsInstance(r.robot_name, str)
+
+    def test_dof_attribute(self):
+        r = Robot(socket_address="127.0.0.1", sidecar_port=19972)
+        self.assertEqual(r.dof, 6)
+
+    def test_required_methods_exist(self):
+        r = Robot(socket_address="127.0.0.1", sidecar_port=19973)
+        required = [
+            "get_current_joint_angles",
+            "get_tcp_pose",
+            "is_robot_in_teach_mode",
+            "switch_to_automatic_mode",
+            "power_on",
+            "stop",
+            "move_joint",
+            "move_linear",
+        ]
+        for name in required:
+            self.assertTrue(callable(getattr(r, name, None)), f"missing {name!r}")
+
+    def test_move_joint_signature_accepts_point_client_kwargs(self):
+        # point_client calls: move_joint(target_joint=[...], speed=..., acceleration=..., current_joint_angles=...)
+        #                  and move_joint(target_pose=[...], ..., current_joint_angles=...)
+        sig = inspect.signature(Robot.move_joint)
+        params = sig.parameters
+        for k in ("target_joint", "target_pose", "speed",
+                 "acceleration", "current_joint_angles"):
+            self.assertIn(k, params, f"move_joint missing param {k!r}")
+
+    def test_move_linear_signature_accepts_point_client_kwargs(self):
+        sig = inspect.signature(Robot.move_linear)
+        params = sig.parameters
+        for k in ("target_pose", "speed", "acceleration", "current_joint_angles"):
+            self.assertIn(k, params, f"move_linear missing param {k!r}")
+

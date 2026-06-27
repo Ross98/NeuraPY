@@ -36,6 +36,11 @@ button:hover { border-color: var(--accent); }
 #fields label { flex-direction: column; align-items: stretch; }
 #fields input, #fields select { width: 100%; }
 #hexOut { width: 100%; font-family: inherit; }
+.dir-badge { grid-column: 1 / -1; padding: 4px 8px; border-radius: 4px;
+             font-size: 11px; margin-bottom: 4px; }
+.dir-badge.dir-out { background: #234; color: #8cf; border-left: 3px solid #8cf; }
+.dir-badge.dir-in  { background: #432; color: #fc8; border-left: 3px solid #fc8; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
 footer { padding: 6px 12px; border-top: 1px solid var(--border); font-size: 12px; }
 #toasts { position: fixed; top: 50px; right: 12px; display: flex; flex-direction: column; gap: 6px; }
 .toast { background: var(--err); color: #000; padding: 6px 12px; border-radius: 4px;

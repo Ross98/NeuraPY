@@ -24,11 +24,28 @@ function renderFields() {
   const def = schema.frames[t];
   const root = $("fields"); root.innerHTML = "";
   if (!def) return;
+  // Direction badge above the fields (camera_to_robot / robot_to_camera)
+  const dir = def.direction;
+  if (dir) {
+    const badge = document.createElement("div");
+    badge.className = "dir-badge " + (dir === "camera_to_robot" ? "dir-out" : "dir-in");
+    badge.textContent = dir === "camera_to_robot"
+      ? "→ camera → robot (you build & send)"
+      : "→ robot → camera (received only; build for simulation)";
+    root.appendChild(badge);
+  }
   for (const f of def.fields) {
     const lbl = document.createElement("label");
     lbl.innerHTML = `<span>${f.name}${f.unit ? " ("+f.unit+")" : ""}</span>`;
     let inp;
-    if (f.type.startsWith && f.type.startsWith("enum{")) {
+    if (f.type === "bytes") {
+      inp = document.createElement("input"); inp.type = "text";
+      inp.placeholder = "hex (e.g. 01020304)";
+      if (f.length) {
+        inp.maxLength = f.length * 2;
+        lbl.querySelector("span").textContent += ` [${f.length}B]`;
+      }
+    } else if (f.type.startsWith && f.type.startsWith("enum{")) {
       inp = document.createElement("select");
       const opts = f.type.slice(5, -1).split(",").map(s => s.trim());
       const labels = f.labels || opts;
@@ -42,26 +59,52 @@ function renderFields() {
       inp.placeholder = "逗号或空格分隔";
     } else { inp = document.createElement("input"); inp.type = "text"; }
     inp.id = "f_" + f.name;
-    if (f.default !== undefined) inp.value = JSON.stringify(f.default);
+    if (f.default !== undefined) {
+      inp.value = f.type === "bytes" && typeof f.default === "string"
+        ? f.default
+        : JSON.stringify(f.default);
+    }
     lbl.appendChild(inp); root.appendChild(lbl);
   }
+  updateSendButtonForDirection();
+}
+
+function updateSendButtonForDirection() {
+  const t = $("frameType").value;
+  const def = schema.frames[t];
+  const btn = $("sendBtn"); const btnBuild = $("sendBuildBtn");
+  if (!def) return;
+  // robot_to_camera frames can't be sent to a fake_camera (they'd be
+  // junk — the camera doesn't issue motion frames in this direction).
+  const sendable = def.direction !== "robot_to_camera";
+  [btn, btnBuild].forEach(b => { if (b) { b.disabled = !sendable; b.title = sendable ? "" : "this frame direction is robot→camera; build only, don't send"; }});
 }
 
 function collectFields() {
   const t = $("frameType").value;
   const def = schema.frames[t]; const out = {};
   for (const f of def.fields) {
-    const v = $("f_" + f.name).value.trim();
-    if (f.type === "int") out[f.name] = parseInt(v, 10);
-    else if (f.type === "float") out[f.name] = parseFloat(v);
-    else if (f.type.startsWith("list[")) out[f.name] = v.split(/[,\s]+/).filter(Boolean).map(Number);
-    else out[f.name] = v;
+    const raw = $("f_" + f.name).value.trim();
+    if (f.type === "int") out[f.name] = parseInt(raw, 10);
+    else if (f.type === "float") out[f.name] = parseFloat(raw);
+    else if (f.type === "bytes") {
+      // Accept either "01020304" or "01 02 03 04"; convert to int list
+      // so the backend (which expects bytes/lists) accepts it uniformly.
+      const hex = raw.replace(/\s+/g, "");
+      if (hex.length % 2 !== 0) throw new Error(`${f.name}: odd hex length`);
+      out[f.name] = Array.from({length: hex.length / 2}, (_, i) =>
+        parseInt(hex.slice(i * 2, i * 2 + 2), 16));
+    }
+    else if (f.type.startsWith("list[")) out[f.name] = raw.split(/[,\s]+/).filter(Boolean).map(Number);
+    else out[f.name] = raw;
   }
   return out;
 }
 
 async function onBuild() {
-  const t = $("frameType").value; const fields = collectFields();
+  const t = $("frameType").value; let fields;
+  try { fields = collectFields(); }
+  catch (e) { toast(e.message); return; }
   const r = await fetch("/api/build", {method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({type: t, fields})});
   const j = await r.json();
@@ -98,9 +141,41 @@ function showFrame(hex, parsed) {
     c.textContent = b.toString(16).padStart(2, "0").toUpperCase();
     grid.appendChild(c);
   }
-  let txt = "type: " + (parsed && parsed.type) + "\n";
-  if (parsed && parsed.fields) for (const [k, v] of Object.entries(parsed.fields)) txt += `  ${k}: ${JSON.stringify(v)}\n`;
-  $("parsed").textContent = txt;
+  const lines = [];
+  lines.push("type: " + (parsed && parsed.type));
+  if (parsed && parsed.fields) {
+    if (parsed.type === "motion_or_status") {
+      // Backend returned both layouts; show each with a label.
+      lines.push("  (motion interpretation):");
+      if (parsed.fields.motion) {
+        for (const [k, v] of Object.entries(parsed.fields.motion)) {
+          lines.push(`    ${k}: ${formatVal(v)}`);
+        }
+      }
+      lines.push("  (status interpretation):");
+      if (parsed.fields.status) {
+        for (const [k, v] of Object.entries(parsed.fields.status)) {
+          lines.push(`    ${k}: ${formatVal(v)}`);
+        }
+      }
+    } else {
+      for (const [k, v] of Object.entries(parsed.fields)) lines.push(`  ${k}: ${formatVal(v)}`);
+    }
+  }
+  $("parsed").textContent = lines.join("\n");
+}
+
+function formatVal(v) {
+  if (v instanceof Uint8Array || v instanceof ArrayBuffer) {
+    return `<bytes ${v.byteLength || v.length}B>`;
+  }
+  if (Array.isArray(v) && v.length > 0 && typeof v[0] === "number" && v.length <= 32) {
+    // Heuristic: short numeric arrays might be bytes; show as hex if so.
+    const allByte = v.every(x => Number.isInteger(x) && x >= 0 && x <= 255);
+    if (allByte && v.length >= 4) return "[" + v.map(x => x.toString(16).padStart(2, "0")).join(" ") + "]";
+    return JSON.stringify(v);
+  }
+  return JSON.stringify(v);
 }
 
 function addLog(ev) {

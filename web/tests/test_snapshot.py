@@ -115,11 +115,14 @@ class TestServer(unittest.TestCase):
         cap. A client sending Content-Length: 999999999 could exhaust
         memory. Now capped at MAX_BODY (64 KiB).
 
-        Uses a raw socket rather than urllib because urllib's behavior
-        with very large rejected bodies is fragile across versions
-        (Expect: 100-continue, connection-close timing)."""
+        Sends a body just above the cap (65 KiB total) — large enough to
+        trigger the cap, small enough to fit in a single TCP segment so
+        the server's drain + close dance doesn't race with the client's
+        flush of remaining bytes."""
         import socket as _socket
-        big_body = b'{"hex":"' + b"a" * 200_000 + b'"}'
+        # Body length: 65536 + small JSON wrapper = 65545 bytes
+        big_body = b'{"hex":"' + b"a" * 65_537 + b'"}'  # > MAX_BODY total
+        self.assertGreater(len(big_body), 64 * 1024)
         req = (b"POST /api/parse HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                b"Content-Type: application/json\r\n"
                b"Content-Length: " + str(len(big_body)).encode() + b"\r\n"
@@ -135,12 +138,10 @@ class TestServer(unittest.TestCase):
                 break
             buf += chunk
         s.close()
-        # Parse status line
         self.assertTrue(buf.startswith(b"HTTP/1."), f"got {buf[:80]!r}")
         status_line = buf.split(b"\r\n", 1)[0]
         status = int(status_line.split()[1])
         self.assertEqual(status, 413)
-        # Body is after \r\n\r\n
         body = buf.split(b"\r\n\r\n", 1)[1]
         self.assertIn(b"too large", body.lower())
 

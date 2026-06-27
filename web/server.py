@@ -81,6 +81,13 @@ def make_server(protocol: Protocol, bus: EventBus,
             if not n:
                 return {}
             if n > MAX_BODY:
+                # Drain up to MAX_BODY bytes silently, then 413.
+                # Without the drain, client gets ConnectionReset because
+                # we respond + close before it finishes sending the body.
+                try:
+                    self.rfile.read(min(n, MAX_BODY))
+                except Exception:
+                    pass
                 self._send(413, {"error": f"body too large: {n} > {MAX_BODY}"})
                 return None
             return json.loads(self.rfile.read(n).decode("utf-8"))

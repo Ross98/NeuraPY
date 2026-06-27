@@ -234,6 +234,20 @@ python test_binary.py
 - MoveL 用 target_pose + move_linear
 - 查询响应格式 / 字节序 / 单位
 
+调试 UI 侧的测试 (`web/tests/`, 75 个用例, 含 11 个真 96-byte 二进制 round-trip):
+
+```bash
+python -m unittest discover -s web/tests    # 全套 (含 frame_router / server / parser / schema)
+bash scripts/check_platform.sh              # 跨平台 API 体检
+```
+
+`web/tests/test_binary_roundtrip.py` 覆盖:
+- `build_motion` / `parse_motion` 全部字段 round-trip
+- `build_status` / `parse_status` 全部 flag round-trip
+- `FrameRouter` 真 96-byte chunked 流 (单帧 / 多帧拼接 / 逐字节喂入 / query+motion 混合)
+- Schema offsets 必须和 codec 实际读字节位置一致 (drift 探测)
+- 线缆 byte 布局符合 xlsx spec (意外改了 offset 立刻爆)
+
 ## 9. 已知限制
 
 - **`connect_timeout` 和 `recv_timeout` 是分开的**。`socket.settimeout()` 一旦设了, 后面所有阻塞操作(connect/recv/send)共用。
@@ -242,7 +256,7 @@ python test_binary.py
 - xlsx 协议是**请求-响应**(1 帧入, 1 帧出), `move_joint` / `move_linear` 是阻塞的。所以状态帧里的 `is_moving` 永远是 0, `work_status` 永远是 0 — 相机只能事后查, 看不到运动中状态。
 - 状态帧的 `at_origin` / `emergency_stop` / `main_program_started` / `work_area` / `exception` / `exception_code` 字段当前写死值 (Neura 没直接 API 暴露), 生产前要按业务实际映射。
 - 帧里 `point_id` 当前只 log, **没有**去 Neura 点位库查 — 理想做法是 `move_joint(["P5"])` 查 `P5`, 库里没有再回退到帧里的 pose 数据。
-- 协议里 `enter_area` / `exit_area` / `work_area` / `blend_radius` 都解析了但**未使用**, 生产前按业务需要加进 neurapy 调用。
+- 协议里 `enter_area` / `exit_area` / `work_area` / `blend_radius` 都解析了但**未接到 neurapy 调用** — 已读,已 round-trip,UI 可设;实际下发需要按业务需要接进 `point_client.py` 的 NeuraDriver。
 - 机器人品牌码 `ROBOT_BRAND = 0x02` (KUKA) 是占位 (Neura 不在 xlsx 列表里), 上线前需要跟相机约定好。
 - **macOS 不能装 neurapy** (PDF §4.2: 官方只支持 Ubuntu 18.04/20.04)。本机用 `parse_frame.py` / `build_frame.py` 做协议开发, 部署到 Linux 控制器跑 `point_client.py`。
 
@@ -250,6 +264,17 @@ python test_binary.py
 ## Debug UI (optional)
 
 Web-based debug panel for the 96-byte binary protocol. Lives in `web/`. Zero new pip dependencies; macOS / Windows / Linux (Python 3.7+).
+
+UI 是 schema 驱动的: 每个协议 (`web/protocols/`) 暴露一个 schema,前端按 schema 自动渲染表单。NeuraPY 的 schema 包含:
+
+- 全部 96 字节字段 (`joints` / `position` / `orientation` / `work_area` / `speed` / `blend_radius` / `motion_type` / `request_motion` / `point_id` / `enter_area` / `exit_area`)
+- 全部状态 flag (`work_status` / `at_origin` / `emergency_stop` / `is_moving` / `main_program_started` / `work_area` / `exception` / `exception_code`)
+- 每个 frame 的 `direction` (`camera_to_robot` / `robot_to_camera`):
+  - 蓝色 badge → 你 build + send
+  - 橙色 badge → 收到帧,不能 send (按钮 disabled)
+- `motion` 和 `status` frame 共享 header `02 01 01 00`,UI 在 Parsed 区域按嵌套展示两种解读让你选
+
+`parse(frame, expected_type=)` 显式消歧:`build` 路径知道 type,自动传;旁路抓帧 (`--inspector-connect`) 默认按 motion 解。
 
 ### Run
 
@@ -296,8 +321,13 @@ Or register a name: add `"myproj": "mymodule:MyProtocol"` to `web/protocols/REGI
 ### Test
 
 ```bash
+# 调试 UI 套件 (75 tests, 含 11 个真 96-byte binary round-trip)
 python -m unittest discover -s web/tests
+
+# 生产 client 套件 (需 neurapy, Linux only)
 python -m unittest test_binary.py
+
+# 跨平台体检 (确保 web/* 不依赖 os-specific API)
 bash scripts/check_platform.sh
 ```
 

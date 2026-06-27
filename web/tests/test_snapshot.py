@@ -44,7 +44,8 @@ class TestServer(unittest.TestCase):
         self.bus = EventBus()
         self.proto = _P()
         self.port = _free_port()
-        self.server = make_server(self.proto, self.bus, host="127.0.0.1", port=self.port)
+        self.server, self.state = make_server(self.proto, self.bus,
+                                               host="127.0.0.1", port=self.port)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         time.sleep(0.05)
@@ -82,14 +83,14 @@ class TestServer(unittest.TestCase):
 
     def test_connect_disconnect_fake_camera(self):
         # /api/connect should create + start a FakeCamera; /api/disconnect should stop it
-        self.assertIsNone(self.server._state.fake_camera)
+        self.assertIsNone(self.state.fake_camera)
         port = _free_port()
         s, b = _post(f"http://127.0.0.1:{self.port}/api/connect",
                       {"role": "fake_camera", "port": port})
         self.assertEqual(s, 200)
         j = json.loads(b)
         self.assertTrue(j["ok"])
-        self.assertIsNotNone(self.server._state.fake_camera)
+        self.assertIsNotNone(self.state.fake_camera)
         # double-connect should refuse
         s2, _ = _post(f"http://127.0.0.1:{self.port}/api/connect",
                        {"role": "fake_camera", "port": _free_port()})
@@ -98,11 +99,16 @@ class TestServer(unittest.TestCase):
         s3, b3 = _post(f"http://127.0.0.1:{self.port}/api/disconnect",
                         {"role": "fake_camera"})
         self.assertEqual(s3, 200)
-        self.assertIsNone(self.server._state.fake_camera)
+        self.assertIsNone(self.state.fake_camera)
         # double-disconnect should refuse
         s4, _ = _post(f"http://127.0.0.1:{self.port}/api/disconnect",
                        {"role": "fake_camera"})
         self.assertEqual(s4, 409)
+
+    def test_make_server_returns_state_not_underscore_attr(self):
+        """Regression: make_server previously set srv._state (private).
+        Now returns (srv, state) as a clean public API."""
+        self.assertFalse(hasattr(self.server, "_state"))
 
     def test_stream_emits_event(self):
         received = []

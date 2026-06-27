@@ -56,3 +56,15 @@ class TestEventBus(unittest.TestCase):
             bus.push(Event(ts=float(i), kind="x", src="y", data={}))
         time.sleep(0.1)
         self.assertTrue(t.is_alive())
+
+    def test_subscribe_queue_and_unsubscribe(self):
+        """Public API for non-generator consumers (e.g. SSE handler)."""
+        bus = EventBus()
+        q = bus.subscribe_queue()
+        bus.push(Event(ts=1.0, kind="x", src="y", data={}))
+        ev = q.get(timeout=0.5)
+        self.assertEqual(ev.ts, 1.0)
+        bus.unsubscribe(q)
+        # After unsubscribe, pushes still go to snapshot but NOT this queue
+        # (we can verify by checking _subs list)
+        self.assertNotIn(q, bus._subs)

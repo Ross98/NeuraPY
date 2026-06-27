@@ -56,7 +56,8 @@ class VisionProtocol:
     @staticmethod
     def build_motion(joints, position=(0,0,0), orientation=(0,0,0),
                      work_area=0, speed=5, blend_radius=0, motion_type=1,
-                     request_motion=1, point_id=1) -> bytes:
+                     request_motion=1, point_id=1,
+                     enter_area=b"", exit_area=b"") -> bytes:
         frame = bytearray(FRAME_SIZE)
         frame[0] = ROBOT_BRAND
         frame[1] = 0x01
@@ -74,6 +75,12 @@ class VisionProtocol:
         frame[55] = motion_type & 0xFF
         frame[56] = request_motion & 0xFF
         struct.pack_into("<i", frame, 57, int(point_id))
+        # enter_area (byte 61-76, 16B) and exit_area (byte 77-92, 16B):
+        # zero-fill then copy caller-supplied bytes (truncated to fit).
+        if enter_area:
+            frame[61:61 + len(enter_area[:16])] = enter_area[:16]
+        if exit_area:
+            frame[77:77 + len(exit_area[:16])] = exit_area[:16]
         return bytes(frame)
 
     # ---- 状态帧 (机器人 -> 相机) ----

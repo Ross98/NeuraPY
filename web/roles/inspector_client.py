@@ -23,15 +23,25 @@ class InspectorClient:
         self._attempts = 0
 
         def on_frame(raw, t):
+            # Camera always sends motion frames (camera→robot direction).
+            # If your camera ever sends status, route it through the
+            # server.py /api/send path or a separate role instead.
             try:
-                parsed = self.protocol.parse(raw)
+                parsed = self.protocol.parse(raw, expected_type="motion")
             except Exception as e:
                 parsed = {"type": "unknown", "fields": {}, "error": str(e)}
             self.bus.push(Event(ts=time.time(), kind="frame_in", src="inspector",
                                 data={"raw_hex": raw.hex(), "len": len(raw),
                                       "parsed": parsed,
                                       "peer": f"{self.host}:{self.port}"}))
-        self.router = FrameRouter(protocol, on_frame=on_frame)
+
+        def on_error(raw, t, err):
+            self.bus.push(Event(ts=time.time(), kind="error", src="inspector",
+                                data={"msg": f"frame handler crashed: {err}",
+                                      "raw_hex": raw.hex(), "len": len(raw),
+                                      "peer": f"{self.host}:{self.port}"}))
+
+        self.router = FrameRouter(protocol, on_frame=on_frame, on_error=on_error)
 
     def start(self):
         if self._thread is not None:

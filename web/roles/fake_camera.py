@@ -9,29 +9,6 @@ from web.protocol import Protocol
 from web.state import Event, EventBus
 
 
-class _Handler(socketserver.BaseRequestHandler):
-    cam: "FakeCamera" = None
-
-    def handle(self):
-        peer = f"{self.client_address[0]}:{self.client_address[1]}"
-        with self.cam._lock:
-            self.cam._clients.add(self.request)
-        self.cam.bus.push(Event(ts=time.time(), kind="connect", src="fake_camera",
-                                data={"peer": peer, "reason": None}))
-        try:
-            while True:
-                chunk = self.request.recv(4096)
-                if not chunk: break
-                self.cam.router.feed(chunk)
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            pass
-        finally:
-            with self.cam._lock:
-                self.cam._clients.discard(self.request)
-            self.cam.bus.push(Event(ts=time.time(), kind="disconnect", src="fake_camera",
-                                    data={"peer": peer, "reason": "client closed"}))
-
-
 class FakeCamera:
     def __init__(self, protocol: Protocol, event_bus: EventBus,
                  host: str = "0.0.0.0", port: int = 9000):
@@ -45,17 +22,49 @@ class FakeCamera:
         self._lock = threading.Lock()
 
         def on_frame(raw, t):
-            try: parsed = self.protocol.parse(raw)
+            # fake_camera mimics a real camera (camera→robot direction),
+            # so all inbound frames are motion frames.
+            try: parsed = self.protocol.parse(raw, expected_type="motion")
             except Exception as e: parsed = {"type": "unknown", "fields": {}, "error": str(e)}
             self.bus.push(Event(ts=time.time(), kind="frame_in", src="fake_camera",
                                 data={"raw_hex": raw.hex(), "len": len(raw), "parsed": parsed}))
 
-        self.router = FrameRouter(protocol, on_frame=on_frame)
+        def on_error(raw, t, err):
+            self.bus.push(Event(ts=time.time(), kind="error", src="fake_camera",
+                                data={"msg": f"frame handler crashed: {err}",
+                                      "raw_hex": raw.hex(), "len": len(raw)}))
+
+        self.router = FrameRouter(protocol, on_frame=on_frame, on_error=on_error)
+
+        # Per-instance handler: binds `cam` via closure so multiple FakeCamera
+        # instances don't share a class-level attribute.
+        cam_ref = self
+        class _Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                peer = f"{self.client_address[0]}:{self.client_address[1]}"
+                with cam_ref._lock:
+                    cam_ref._clients.add(self.request)
+                cam_ref.bus.push(Event(ts=time.time(), kind="connect", src="fake_camera",
+                                       data={"peer": peer, "reason": None}))
+                try:
+                    while True:
+                        chunk = self.request.recv(4096)
+                        if not chunk: break
+                        cam_ref.router.feed(chunk)
+                except (ConnectionResetError, BrokenPipeError, OSError):
+                    pass
+                finally:
+                    with cam_ref._lock:
+                        cam_ref._clients.discard(self.request)
+                    cam_ref.bus.push(Event(ts=time.time(), kind="disconnect", src="fake_camera",
+                                           data={"peer": peer, "reason": "client closed"}))
+
+        self._handler_cls = _Handler
 
     def start(self):
         if self._server is not None: return
-        _Handler.cam = self
-        self._server = socketserver.ThreadingTCPServer((self.host, self.port), _Handler)
+        self._server = socketserver.ThreadingTCPServer((self.host, self.port), self._handler_cls)
+        self._server.allow_reuse_address = True  # avoid TIME_WAIT after quick restart
         self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever,
                                         daemon=True, name="fake-camera")

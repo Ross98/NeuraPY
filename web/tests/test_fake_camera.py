@@ -65,3 +65,27 @@ class TestFakeCamera(unittest.TestCase):
             self.assertIn("disconnect", kinds)
         finally:
             cam.stop()
+
+    def test_two_cameras_do_not_share_clients(self):
+        """Regression: _Handler.cam was a class attribute, so starting a 2nd
+        FakeCamera reassigned it and stole the 1st camera's connections."""
+        bus1, bus2 = EventBus(), EventBus()
+        port1, port2 = _free_port(), _free_port()
+        cam1 = FakeCamera(_P(), bus1, host="127.0.0.1", port=port1)
+        cam2 = FakeCamera(_P(), bus2, host="127.0.0.1", port=port2)
+        cam1.start(); cam2.start()
+        try:
+            s1 = socket.socket(); s1.connect(("127.0.0.1", port1))
+            s2 = socket.socket(); s2.connect(("127.0.0.1", port2))
+            time.sleep(0.15)
+            # cam1's client belongs to cam1, cam2's to cam2
+            self.assertEqual(cam1.peer_count, 1)
+            self.assertEqual(cam2.peer_count, 1)
+            cam1.send_bytes(b"\x01\x02\x03\x04")
+            time.sleep(0.15)
+            # cam1 broadcast → s1 gets it; s2 does NOT
+            self.assertEqual(s1.recv(4), b"\x01\x02\x03\x04")
+            self.assertEqual(s2.recv(0), b"")  # non-blocking peek would be better but recv(0) returns immediately
+            s1.close(); s2.close()
+        finally:
+            cam1.stop(); cam2.stop()

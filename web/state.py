@@ -45,5 +45,22 @@ class EventBus:
             try: self._subs.remove(q)
             except ValueError: pass
 
+    def subscribe_queue(self) -> "queue.Queue":
+        """Public API for non-generator consumers (e.g. SSE handler).
+
+        Returns a fresh Queue that gets every pushed Event. Caller is
+        responsible for removing it via unsubscribe() when done — unlike
+        subscribe(), there's no lifecycle tied to a generator.
+        """
+        q: queue.Queue = queue.Queue(maxsize=self._maxlen)
+        self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: "queue.Queue") -> None:
+        try:
+            self._subs.remove(q)
+        except ValueError:
+            pass
+
     def snapshot(self) -> list:
         return list(self._snapshot)

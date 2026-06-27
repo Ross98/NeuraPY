@@ -17,8 +17,15 @@ class Protocol(ABC):
         """Return frame type name. e.g. 'query' / 'motion' / 'status' / 'unknown'."""
 
     @abstractmethod
-    def parse(self, frame: bytes) -> Dict[str, Any]:
-        """Return {"type": "<classify result>", "fields": {<name>: <value>, ...}}."""
+    def parse(self, frame: bytes, expected_type: str = None) -> Dict[str, Any]:
+        """Return {"type": "<classify result>", "fields": {<name>: <value>, ...}}.
+
+        `expected_type` is an optional hint for protocols (like NeuraPY)
+        where two frame types share the same header and the decoder
+        cannot disambiguate by header alone. Callers that know the
+        frame's origin (e.g. they just built it, or it's a known
+        response) should pass the type so parsing is unambiguous.
+        """
 
     @abstractmethod
     def build(self, type: str, **fields) -> bytes:

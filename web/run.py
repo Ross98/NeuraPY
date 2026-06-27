@@ -53,8 +53,8 @@ def main():
         ic.start()
         print(f"inspector connected to {host}:{p}")
 
-    srv = make_server(protocol, bus, host=args.host, port=args.port)
-    srv._state.fake_camera = cam
+    srv, state = make_server(protocol, bus, host=args.host, port=args.port)
+    state.fake_camera = cam
     print(f"web UI on http://{args.host}:{args.port}  protocol={protocol.__class__.__name__}")
     try:
         srv.serve_forever()

@@ -14,15 +14,43 @@ from web.state import EventBus
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-class _State:
+class ServerState:
+    """Public, mutable container shared between the HTTP handler closure
+    and external callers (e.g. run.py injecting a pre-started FakeCamera).
+
+    Previously the same data was hidden as srv._state, forcing callers to
+    reach into a private attribute. Now make_server returns this directly.
+    """
+
     def __init__(self, protocol: Protocol, bus: EventBus):
         self.protocol = protocol
         self.bus = bus
-        self.fake_camera = None  # injected by run.py after start
+        self.fake_camera = None  # injected by run.py or /api/connect
 
 
-def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: int = 8765):
-    state = _State(protocol, bus)
+def _to_jsonable(obj):
+    """Recursively convert bytes fields (e.g. enter_area) to hex strings
+    so json.dumps doesn't crash. Handles nested dicts/lists/tuples."""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    if isinstance(obj, bytes):
+        return obj.hex()
+    if isinstance(obj, bytearray):
+        return bytes(obj).hex()
+    return obj
+
+
+def make_server(protocol: Protocol, bus: EventBus,
+                host: str = "0.0.0.0", port: int = 8765):
+    """Create the HTTP server. Returns (ThreadingHTTPServer, ServerState).
+
+    Callers that need to inject state (e.g. a pre-started FakeCamera) should
+    hold onto the returned ServerState and mutate its attributes — do NOT
+    poke private attributes on the server object.
+    """
+    state = ServerState(protocol, bus)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -30,7 +58,7 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
 
         def _send(self, code, body, content_type="application/json", extra_headers=None):
             if isinstance(body, (dict, list)):
-                body = json.dumps(body, ensure_ascii=True).encode("utf-8")
+                body = json.dumps(_to_jsonable(body), ensure_ascii=True).encode("utf-8")
             elif isinstance(body, str):
                 body = body.encode("utf-8")
             self.send_response(code)
@@ -111,7 +139,9 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
                     self._send(400, {"error": f"build failed: {e}"})
                     return
                 try:
-                    parsed = state.protocol.parse(raw)
+                    # We just built it — we know the type. Pass it as a
+                    # hint so motion/status disambiguation is deterministic.
+                    parsed = state.protocol.parse(raw, expected_type=ftype)
                 except Exception:
                     parsed = {"type": ftype, "fields": fields}
                 self._send(200, {"hex": raw.hex(), "len": len(raw),
@@ -166,8 +196,7 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
-            q: queue.Queue = queue.Queue(maxsize=2000)
-            state.bus._subs.append(q)
+            q = state.bus.subscribe_queue()
             try:
                 while True:
                     try:
@@ -187,12 +216,8 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
                     except (BrokenPipeError, OSError):
                         break
             finally:
-                try:
-                    state.bus._subs.remove(q)
-                except ValueError:
-                    pass
+                state.bus.unsubscribe(q)
 
     srv = ThreadingHTTPServer((host, port), Handler)
     srv.daemon_threads = True
-    srv._state = state  # exposed for run.py to inject fake_camera later
-    return srv
+    return srv, state

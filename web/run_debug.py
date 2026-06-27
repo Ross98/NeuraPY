@@ -20,7 +20,6 @@ from pathlib import Path
 _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
-from pathlib import Path
 
 from web.protocols import load
 from web.roles.fake_camera import FakeCamera
@@ -30,6 +29,76 @@ from web.state import Event, EventBus
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
 MOCK_PKG_PARENT = HERE / "mock"
+
+
+def _drain_proc(proc, bus):
+    """Read point_client stdout line-by-line, push state JSON or logs to bus."""
+    for line in iter(proc.stdout.readline, ""):
+        line = line.rstrip()
+        if line.startswith("{"):
+            try:
+                obj = json.loads(line)
+                if obj.get("event") == "state":
+                    bus.push(Event(
+                        ts=obj.get("ts", time.time()),
+                        kind="state", src="mock",
+                        data={"joints_rad": obj.get("joints", []),
+                              "tcp": obj.get("tcp", []),
+                              "is_moving": obj.get("is_moving", False)}))
+                    continue
+            except json.JSONDecodeError:
+                pass
+        bus.push(Event(ts=time.time(), kind="log", src="point_client",
+                       data={"msg": line}))
+
+
+def _spawn_point_client(args, env, bus):
+    """Launch point_client as a subprocess; return (proc, stdout_thread)."""
+    pc_args = [sys.executable, str(PROJECT_ROOT / "point_client.py"),
+               "--camera-host", "127.0.0.1",
+               "--camera-port", str(args.fake_camera_port)]
+    pc_args += args.point_client_args
+    print(f"starting: {' '.join(pc_args)}  PYTHONPATH+={MOCK_PKG_PARENT}")
+    proc = subprocess.Popen(pc_args, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            bufsize=1, text=True)
+    t = threading.Thread(target=_drain_proc, args=(proc, bus),
+                         daemon=True, name="point-client-stdout")
+    t.start()
+    return proc, t
+
+
+def watch_exit_loop_factory(args, env, bus, shutdown, initial_proc, initial_thread):
+    """Build the watch_exit closure, exposed for unit testing.
+
+    The closure captures `proc_holder` (a single-element list) so the
+    loop body can rebind the running subprocess without `nonlocal`. Each
+    iteration reads proc_holder[0], waits, then overwrites it after respawn.
+    """
+    proc_holder = [initial_proc]
+    _ = initial_thread  # held to keep the drain thread alive; spawning creates a new one
+
+    def watch_exit():
+        restart_delay = 2.0
+        while not shutdown.is_set():
+            rc = proc_holder[0].wait()
+            if shutdown.is_set():
+                return
+            bus.push(Event(ts=time.time(), kind="log", src="run_debug",
+                           data={"msg": f"point_client exited {rc}; "
+                                        f"restarting in {restart_delay:.0f}s"}))
+            t0 = time.monotonic()
+            if shutdown.wait(restart_delay):
+                return
+            new_proc, _t = _spawn_point_client(args, env, bus)
+            proc_holder[0] = new_proc
+            # If the new one died almost immediately, double the backoff (cap 30s)
+            if time.monotonic() - t0 - restart_delay < 1.0:
+                restart_delay = min(restart_delay * 2, 30.0)
+            else:
+                restart_delay = 2.0
+
+    return watch_exit
 
 
 def main():
@@ -57,52 +126,13 @@ def main():
     env["PYTHONPATH"] = str(MOCK_PKG_PARENT) + os.pathsep + env.get("PYTHONPATH", "")
     env["MOCK_SIDECAR_PORT"] = str(args.mock_sidecar_port)
 
-    pc_args = [sys.executable, str(PROJECT_ROOT / "point_client.py"),
-               "--camera-host", "127.0.0.1",
-               "--camera-port", str(args.fake_camera_port)]
-    pc_args += args.point_client_args
-
-    print(f"starting: {' '.join(pc_args)}  PYTHONPATH+={MOCK_PKG_PARENT}")
-    proc = subprocess.Popen(pc_args, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            bufsize=1, text=True)
-
-    def drain_stdout():
-        for line in iter(proc.stdout.readline, ""):
-            line = line.rstrip()
-            if line.startswith("{"):
-                try:
-                    obj = json.loads(line)
-                    if obj.get("event") == "state":
-                        bus.push(Event(
-                            ts=obj.get("ts", time.time()),
-                            kind="state", src="mock",
-                            data={"joints_rad": obj.get("joints", []),
-                                  "tcp": obj.get("tcp", []),
-                                  "is_moving": obj.get("is_moving", False)}))
-                        continue
-                except json.JSONDecodeError:
-                    pass
-            bus.push(Event(ts=time.time(), kind="log", src="point_client",
-                           data={"msg": line}))
-
-    threading.Thread(target=drain_stdout, daemon=True,
-                     name="point-client-stdout").start()
-
     shutdown = threading.Event()
-
-    def watch_exit():
-        rc = proc.wait()
-        bus.push(Event(ts=time.time(), kind="log", src="run_debug",
-                       data={"msg": f"point_client exited {rc}; restarting in 2s"}))
-        time.sleep(2.0)
-        if not shutdown.is_set():
-            main()
-
+    proc, drain_thread = _spawn_point_client(args, env, bus)
+    watch_exit = watch_exit_loop_factory(args, env, bus, shutdown, proc, drain_thread)
     threading.Thread(target=watch_exit, daemon=True, name="watch-exit").start()
 
-    srv = make_server(protocol, bus, host=args.host, port=args.port)
-    srv._state.fake_camera = cam
+    srv, state = make_server(protocol, bus, host=args.host, port=args.port)
+    state.fake_camera = cam
     print(f"web UI on http://{args.host}:{args.port}  protocol={protocol.__class__.__name__}")
     print("press Ctrl-C to exit")
     try:

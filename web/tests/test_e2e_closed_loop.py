@@ -18,8 +18,11 @@ class TestE2E(unittest.TestCase):
         r.feed(raw)
         self.assertEqual(len(events), 1)
         raw_back, t = events[0]
-        self.assertIn(t, ("motion", "motion_or_status"))
-        parsed = p.parse(raw_back)
+        # FrameRouter can't know motion vs status (same header), so
+        # classify() returns motion_or_status. Caller passes expected_type
+        # to disambiguate.
+        self.assertEqual(t, "motion_or_status")
+        parsed = p.parse(raw_back, expected_type="motion")
         self.assertEqual(parsed["type"], "motion")
         rt = parsed["fields"].get("joints")
         if rt is not None:

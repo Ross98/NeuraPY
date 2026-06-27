@@ -266,6 +266,25 @@ python web/run.py --protocol neurapy --inspector-connect 192.168.2.50:9000
 
 Browser: http://127.0.0.1:8765
 
+### 配置 IP / 端口
+
+所有地址都是命令行参数,默认值只在不传参数时生效。改完临时用就传 `--xxx`,长期用就改源码里的 `default=...`。
+
+| 场景 | 命令 / 改哪里 | 默认值 |
+|---|---|---|
+| 相机地址 (生产) | `python point_client.py --camera-host X --camera-port Y` | `192.168.2.50:9000` |
+| 机器人控制器 IP (生产) | `python point_client.py --robot-ip Z` | `192.168.2.13` |
+| Web UI 监听 | `python web/run.py --host H --port P` | `0.0.0.0:8765` |
+| fake_camera 端口 | `python web/run.py --fake-camera-port N` | `9000` |
+| 旁路抓真相机包 | `python web/run.py --inspector-connect HOST:PORT` | (无,需显式给) |
+| mock neurapy 内部端口 | `python web/run_debug.py --mock-sidecar-port N` | `8766` |
+
+`web/run_debug.py` 启动时会把 `point_client` 强制连 `127.0.0.1:<fake-camera-port>`(闭 loop,不连真相机)。要它连别的相机,改 `web/run_debug.py` 里 `--camera-host 127.0.0.1` 这一行。
+
+改源码默认值的行号:
+- 生产端: `point_client.py` line 111 (`camera_host`)、113 (`robot_ip`)、282-284 (argparse default)
+- 调试 UI: `web/run.py` line 30-32,`web/run_debug.py` line 107-110
+
 ### Add a new protocol
 
 1. `cp web/protocols/_template.py /path/to/my_proto.py`

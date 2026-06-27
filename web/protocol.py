@@ -2,6 +2,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+# Valid values for the optional frame `direction` field in schema.
+FRAME_DIRECTIONS = frozenset({"camera_to_robot", "robot_to_camera"})
+
 
 class Protocol(ABC):
     """All debug-UI protocol adapters implement this interface.
@@ -34,7 +37,16 @@ class Protocol(ABC):
     @property
     @abstractmethod
     def schema(self) -> Dict[str, Any]:
-        """Return UI form schema: {"frames": {<type>: {"label", "fields": [...]}}}.
+        """Return UI form schema: {"frames": {<type>: {...}}}.
+
+        Each frame entry should (when applicable) carry a `direction`
+        field with one of:
+          - "camera_to_robot"  (e.g. motion / query frames)
+          - "robot_to_camera"  (e.g. status frames)
+        The frontend uses this to color frames by origin and restrict
+        which send-target is valid. The field is OPTIONAL — protocols
+        without bidirectional traffic (e.g. a one-way sensor protocol)
+        can omit it.
 
         Field metadata: name, type, unit?, offset, length, default?.
         Types: int | float | bytes | list[int] | list[float] | list[float3] | list[float6] | enum{...}

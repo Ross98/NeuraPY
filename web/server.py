@@ -13,6 +13,12 @@ from web.state import EventBus
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# Hard cap on POST body size to prevent memory-exhaustion DoS from a
+# client sending Content-Length: 999999999. 64 KiB is well above any
+# legitimate hex payload (a 96-byte frame = 192 hex chars + JSON
+# overhead ≈ 250 B) and well below any reasonable max.
+MAX_BODY = 64 * 1024
+
 
 class ServerState:
     """Public, mutable container shared between the HTTP handler closure
@@ -74,6 +80,9 @@ def make_server(protocol: Protocol, bus: EventBus,
             n = int(self.headers.get("Content-Length", "0"))
             if not n:
                 return {}
+            if n > MAX_BODY:
+                self._send(413, {"error": f"body too large: {n} > {MAX_BODY}"})
+                return None
             return json.loads(self.rfile.read(n).decode("utf-8"))
 
         def do_GET(self):
@@ -111,6 +120,9 @@ def make_server(protocol: Protocol, bus: EventBus,
                 body = self._read_json()
             except Exception as e:
                 self._send(400, {"error": f"bad json: {e}"})
+                return
+            if body is None:
+                # _read_json already sent an error response (413)
                 return
 
             if path == "/api/parse":
@@ -203,7 +215,7 @@ def make_server(protocol: Protocol, bus: EventBus,
                         ev = q.get(timeout=15.0)
                     except queue.Empty:
                         try:
-                            self.wfile.write(b": keepalive\n\n")
+                            self.wfile.write(b":keepalive\n\n")
                             self.wfile.flush()
                         except (BrokenPipeError, OSError):
                             break

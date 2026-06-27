@@ -1,5 +1,5 @@
 import unittest
-from web.protocol import Protocol
+from web.protocol import FRAME_DIRECTIONS, Protocol
 
 
 class TestProtocolABC(unittest.TestCase):
@@ -25,3 +25,10 @@ class TestProtocolABC(unittest.TestCase):
         p = Full()
         self.assertEqual(p.FRAME_SIZE, 10)
         self.assertIsInstance(p, Protocol)
+
+    def test_direction_values_are_frozen(self):
+        """The set of valid direction values must be frozen so a typo
+        like 'camera_2_robot' or 'robot_to_cam' is caught at schema
+        validation time, not silently ignored by the frontend."""
+        self.assertEqual(FRAME_DIRECTIONS,
+                         frozenset({"camera_to_robot", "robot_to_camera"}))

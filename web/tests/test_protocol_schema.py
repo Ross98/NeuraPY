@@ -75,3 +75,12 @@ class TestNeuraPYSchema(unittest.TestCase):
         self.assertEqual(parsed["type"], "motion_or_status")
         self.assertIn("motion", parsed["fields"])
         self.assertIn("status", parsed["fields"])
+
+    def test_direction_values_are_valid(self):
+        """If a protocol declares direction, it must use one of the
+        frozen values. Anything else is a typo that the UI won't handle."""
+        from web.protocol import FRAME_DIRECTIONS
+        for ftype, entry in self.p.schema["frames"].items():
+            if "direction" in entry:
+                self.assertIn(entry["direction"], FRAME_DIRECTIONS,
+                              f"{ftype} has invalid direction {entry['direction']!r}")

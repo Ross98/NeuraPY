@@ -110,6 +110,40 @@ class TestServer(unittest.TestCase):
         Now returns (srv, state) as a clean public API."""
         self.assertFalse(hasattr(self.server, "_state"))
 
+    def test_oversized_post_body_rejected(self):
+        """Regression: server._read_json called rfile.read(n) without any
+        cap. A client sending Content-Length: 999999999 could exhaust
+        memory. Now capped at MAX_BODY (64 KiB).
+
+        Uses a raw socket rather than urllib because urllib's behavior
+        with very large rejected bodies is fragile across versions
+        (Expect: 100-continue, connection-close timing)."""
+        import socket as _socket
+        big_body = b'{"hex":"' + b"a" * 200_000 + b'"}'
+        req = (b"POST /api/parse HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+               b"Content-Type: application/json\r\n"
+               b"Content-Length: " + str(len(big_body)).encode() + b"\r\n"
+               b"Connection: close\r\n\r\n" + big_body)
+        s = _socket.socket()
+        s.settimeout(3)
+        s.connect(("127.0.0.1", self.port))
+        s.sendall(req)
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        s.close()
+        # Parse status line
+        self.assertTrue(buf.startswith(b"HTTP/1."), f"got {buf[:80]!r}")
+        status_line = buf.split(b"\r\n", 1)[0]
+        status = int(status_line.split()[1])
+        self.assertEqual(status, 413)
+        # Body is after \r\n\r\n
+        body = buf.split(b"\r\n\r\n", 1)[1]
+        self.assertIn(b"too large", body.lower())
+
     def test_stream_emits_event(self):
         received = []
         stop = threading.Event()

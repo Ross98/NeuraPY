@@ -14,6 +14,8 @@ async function init() {
   $("buildBtn").addEventListener("click", onBuild);
   $("sendBtn").addEventListener("click", onSend);
   $("sendBuildBtn").addEventListener("click", async () => { await onBuild(); await onSend(); });
+  $("startCam").addEventListener("click", () => setCam(true));
+  $("stopCam").addEventListener("click", () => setCam(false));
   renderFields();
   startSSE();
   $("status").textContent = "live"; $("status").classList.add("ok");
@@ -123,6 +125,44 @@ function updateStateBar(d) {
 function toast(msg) {
   const d = document.createElement("div"); d.className = "toast"; d.textContent = msg;
   $("toasts").appendChild(d); setTimeout(() => d.remove(), 3000);
+}
+
+
+function setCam(on) {
+  const role = $("role").value;
+  const endpoint = on ? "/api/connect" : "/api/disconnect";
+  const body = {role, port: parseInt($("port").value, 10)};
+  if (role === "inspector") body.host = $("host").value || "127.0.0.1";
+  let r;
+  try {
+    r = await fetch(endpoint, {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)});
+  } catch (e) {
+    toast(`network error: ${e}`);
+    return;
+  }
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) {
+    setRoleStatus(role, on);
+  } else {
+    toast(j.error || `${role} ${on ? "start" : "stop"} failed (${r.status})`);
+  }
+}
+
+function setRoleStatus(role, on) {
+  if (role === "fake_camera") setCamStatus(on);
+  else if (role === "inspector") setInspectorStatus(on);
+}
+
+function setCamStatus(on) {
+  $("cam").textContent = "camera: " + (on ? "running" : "stopped");
+  $("cam").classList.toggle("ok", on);
+}
+
+function setInspectorStatus(on) {
+  $("mock").textContent = "inspector: " + (on ? "connected" : "stopped");
+  $("mock").classList.toggle("ok", on);
 }
 
 init();

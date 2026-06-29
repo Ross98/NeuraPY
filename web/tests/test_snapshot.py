@@ -131,3 +131,38 @@ class TestServer(unittest.TestCase):
         t.join(timeout=2.0)
         stop.set()
         self.assertTrue(any(e["kind"] == "new" for e in received), received)
+
+    def test_connect_disconnect_inspector(self):
+        # /api/connect with role=inspector should start an InspectorClient
+        self.assertIsNone(self.server._state.inspector)
+        s, b = _post(f"http://127.0.0.1:{self.port}/api/connect",
+                      {"role": "inspector", "host": "127.0.0.1", "port": 65535})
+        # 200 = inspector thread spawned (will fail to connect 65535, that's fine)
+        # 503 = OSError during connect (unusual; we don't expect this here)
+        self.assertIn(s, (200, 503))
+        j = json.loads(b)
+        if s == 200:
+            self.assertEqual(j["ok"], True)
+            self.assertIsNotNone(self.server._state.inspector)
+            try:
+                # double-connect should refuse
+                s2, _ = _post(f"http://127.0.0.1:{self.port}/api/connect",
+                               {"role": "inspector", "host": "127.0.0.1", "port": 65535})
+                self.assertEqual(s2, 409)
+                # disconnect
+                s3, _ = _post(f"http://127.0.0.1:{self.port}/api/disconnect",
+                               {"role": "inspector"})
+                self.assertEqual(s3, 200)
+                self.assertIsNone(self.server._state.inspector)
+            finally:
+                # belt-and-suspenders: if anything failed mid-test, still stop
+                if self.server._state.inspector is not None:
+                    self.server._state.inspector.stop()
+                    self.server._state.inspector = None
+
+    def test_connect_unknown_role(self):
+        s, b = _post(f"http://127.0.0.1:{self.port}/api/connect",
+                      {"role": "bogus"})
+        self.assertEqual(s, 400)
+        self.assertIn("unknown role", json.loads(b)["error"])
+

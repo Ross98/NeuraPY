@@ -52,3 +52,9 @@ class TestInspector(unittest.TestCase):
         ic.stop()
         msgs = [e["data"].get("msg", "") for e in bus.snapshot() if e["kind"] == "log"]
         self.assertTrue(any("retry" in m or "failed" in m for m in msgs), msgs)
+
+    def test_recv_timeout_default_matches_point_client(self):
+        # Default 60s so inspector survives normal frame gaps from real cameras
+        ic = InspectorClient(_P(), EventBus(), host="127.0.0.1", port=1)
+        self.assertEqual(ic._recv_timeout, 60.0)
+

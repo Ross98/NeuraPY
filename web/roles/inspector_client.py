@@ -10,13 +10,24 @@ from web.state import Event, EventBus
 class InspectorClient:
     def __init__(self, protocol: Protocol, event_bus: EventBus, host: str, port: int,
                  retry_initial: float = 1.0, retry_max: float = 30.0,
+                 recv_timeout: float = 60.0,
                  retry_max_attempts: int = 0):
+        """Passive TCP frame capturer.
+
+        - retry_initial/recv_timeout default to point_client's defaults (1s
+          backoff, 60s recv) so the inspector can sit next to a real camera
+          without disconnecting during normal frame gaps.
+        - connect_timeout (separate from recv_timeout) caps how long we wait
+          for the SYN-ACK before giving up on this attempt.
+        """
         self.protocol = protocol
         self.bus = event_bus
         self.host = host
         self.port = port
         self._retry = retry_initial
         self._retry_max = retry_max
+        self._recv_timeout = recv_timeout
+        self._connect_timeout = min(5.0, retry_initial)
         self._retry_max_attempts = retry_max_attempts
         self._stop = threading.Event()
         self._thread = None
@@ -51,7 +62,9 @@ class InspectorClient:
             if self._retry_max_attempts and self._attempts > self._retry_max_attempts:
                 return
             try:
-                sock = socket.create_connection((self.host, self.port), timeout=2.0)
+                sock = socket.create_connection(
+                    (self.host, self.port), timeout=self._connect_timeout)
+                sock.settimeout(self._recv_timeout)
                 self.bus.push(Event(ts=time.time(), kind="log", src="inspector",
                                     data={"msg": f"connected to {self.host}:{self.port}"}))
                 backoff = self._retry
@@ -67,7 +80,7 @@ class InspectorClient:
                                     data={"peer": f"{self.host}:{self.port}", "reason": "closed"}))
             except (OSError, socket.timeout) as e:
                 self.bus.push(Event(ts=time.time(), kind="log", src="inspector",
-                                    data={"msg": f"connect failed: {e}; retrying in {backoff:.0f}s"}))
+                                    data={"msg": f"recv failed (timeout={self._recv_timeout:.0f}s): {e}; retrying in {backoff:.0f}s"}))
                 if self._stop.wait(backoff):
                     return
                 backoff = min(backoff * 2, self._retry_max)

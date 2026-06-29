@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from web.protocol import Protocol
 from web.roles.fake_camera import FakeCamera
+from web.roles.inspector_client import InspectorClient
 from web.sse import sse_format
 from web.state import EventBus
 
@@ -18,7 +19,8 @@ class _State:
     def __init__(self, protocol: Protocol, bus: EventBus):
         self.protocol = protocol
         self.bus = bus
-        self.fake_camera = None  # injected by run.py after start
+        self.fake_camera = None   # set by /api/connect (role=fake_camera)
+        self.inspector = None     # set by /api/connect (role=inspector)
 
 
 def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: int = 8765):
@@ -130,33 +132,54 @@ def make_server(protocol: Protocol, bus: EventBus, host: str = "0.0.0.0", port: 
                 self._send(200, {"ok": True, "raw_hex": raw.hex(), "len": len(raw)})
             elif path == "/api/connect":
                 role = body.get("role", "fake_camera")
-                port = int(body.get("port", 9000))
-                if role != "fake_camera":
+                if role == "fake_camera":
+                    port = int(body.get("port", 9000))
+                    if state.fake_camera is not None:
+                        self._send(409, {"error": "fake_camera already running"})
+                        return
+                    try:
+                        cam = FakeCamera(state.protocol, state.bus,
+                                         host="0.0.0.0", port=port)
+                        cam.start()
+                    except OSError as e:
+                        self._send(503, {"error": f"port {port} bind failed: {e}"})
+                        return
+                    state.fake_camera = cam
+                    self._send(200, {"ok": True, "role": role, "port": port})
+                elif role == "inspector":
+                    host = body.get("host", "127.0.0.1")
+                    port = int(body.get("port", 9000))
+                    if state.inspector is not None:
+                        self._send(409, {"error": "inspector already running"})
+                        return
+                    ic = InspectorClient(state.protocol, state.bus,
+                                         host=host, port=port)
+                    ic.start()
+                    state.inspector = ic
+                    self._send(200, {"ok": True, "role": role,
+                                     "host": host, "port": port})
+                else:
                     self._send(400, {"error": f"unknown role: {role!r}"})
                     return
-                if state.fake_camera is not None:
-                    self._send(409, {"error": "fake_camera already running"})
-                    return
-                try:
-                    cam = FakeCamera(state.protocol, state.bus,
-                                     host="0.0.0.0", port=port)
-                    cam.start()
-                except OSError as e:
-                    self._send(503, {"error": f"port {port} bind failed: {e}"})
-                    return
-                state.fake_camera = cam
-                self._send(200, {"ok": True, "role": role, "port": port})
             elif path == "/api/disconnect":
                 role = body.get("role", "fake_camera")
-                if role != "fake_camera":
+                if role == "fake_camera":
+                    if state.fake_camera is None:
+                        self._send(409, {"error": "fake_camera not running"})
+                        return
+                    state.fake_camera.stop()
+                    state.fake_camera = None
+                    self._send(200, {"ok": True, "role": role})
+                elif role == "inspector":
+                    if state.inspector is None:
+                        self._send(409, {"error": "inspector not running"})
+                        return
+                    state.inspector.stop()
+                    state.inspector = None
+                    self._send(200, {"ok": True, "role": role})
+                else:
                     self._send(400, {"error": f"unknown role: {role!r}"})
                     return
-                if state.fake_camera is None:
-                    self._send(409, {"error": "fake_camera not running"})
-                    return
-                state.fake_camera.stop()
-                state.fake_camera = None
-                self._send(200, {"ok": True, "role": role})
             else:
                 self._send(404, {"error": "not found"})
 

@@ -16,7 +16,11 @@
   <section id="left">
     <h2>CONNECTS</h2>
     <div class="row">
-      <label>Role <select id="role"><option>fake_camera</option></select></label>
+      <label>Role <select id="role">
+        <option value="fake_camera">fake_camera</option>
+        <option value="inspector">inspector</option>
+      </select></label>
+      <label>Host <input id="host" type="text" value="127.0.0.1"></label>
       <label>Port <input id="port" type="number" value="9000"></label>
       <button id="startCam">Start</button>
       <button id="stopCam">Stop</button>
